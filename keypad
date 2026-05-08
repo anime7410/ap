@@ -1,0 +1,287 @@
+#include "main.h"
+#include <string.h>
+
+/* ---------------- FUNCTION PROTOTYPES ---------------- */
+void SystemClock_Config(void);
+static void MX_GPIO_Init(void);
+
+/* ---------------- LCD FUNCTIONS (8-BIT MODE) ---------------- */
+
+/**
+ * @brief  Sends a full 8-bit command or data byte to the LCD.
+ * @note   This replaces the old 'lcd_send_nibble' function.
+ * We send the full 8 bits at once across the 8 data lines.
+ */
+void lcd_send_byte(uint8_t value)
+{
+    // 1. Map individual bits of 'value' to the physical STM32 pins
+    //    based on image_1.png (PE11-PE15, PD7-PD9).
+
+    // Data Pins D0 - D4 on Port E
+    HAL_GPIO_WritePin(GPIOE, GPIO_PIN_11, (value >> 0) & 1); // D0
+    HAL_GPIO_WritePin(GPIOE, GPIO_PIN_12, (value >> 1) & 1); // D1
+    HAL_GPIO_WritePin(GPIOE, GPIO_PIN_13, (value >> 2) & 1); // D2
+    HAL_GPIO_WritePin(GPIOE, GPIO_PIN_14, (value >> 3) & 1); // D3
+    HAL_GPIO_WritePin(GPIOE, GPIO_PIN_15, (value >> 4) & 1); // D4
+
+    // Data Pins D5 - D7 on Port D
+    HAL_GPIO_WritePin(GPIOD, GPIO_PIN_7, (value >> 5) & 1);  // D5
+    HAL_GPIO_WritePin(GPIOD, GPIO_PIN_8, (value >> 6) & 1);  // D6
+    HAL_GPIO_WritePin(GPIOD, GPIO_PIN_9, (value >> 7) & 1);  // D7
+
+    // 2. Pulse the Enable (EN) Pin on PH1 to 'latch' the 8-bit data.
+    HAL_GPIO_WritePin(GPIOH, GPIO_PIN_1, GPIO_PIN_SET);
+    HAL_Delay(1); // Short pulse
+    HAL_GPIO_WritePin(GPIOH, GPIO_PIN_1, GPIO_PIN_RESET);
+}
+
+void lcd_send_cmd(uint8_t cmd)
+{
+    // 1. Set RS (Register Select) LOW for Command mode. Pin: PD10
+    HAL_GPIO_WritePin(GPIOD, GPIO_PIN_10, GPIO_PIN_RESET);
+
+    // 2. Send the full 8-bit command byte.
+    lcd_send_byte(cmd);
+
+    // 3. Command processing time
+    HAL_Delay(2);
+}
+
+void lcd_send_data(uint8_t data)
+{
+    // 1. Set RS (Register Select) HIGH for Data mode. Pin: PD10
+    HAL_GPIO_WritePin(GPIOD, GPIO_PIN_10, GPIO_PIN_SET);
+
+    // 2. Send the full 8-bit data byte.
+    lcd_send_byte(data);
+
+    // 3. Data writing time
+    HAL_Delay(2);
+}
+
+void lcd_init(void)
+{
+    // Wake up delay
+    HAL_Delay(50);
+
+    // ---------------- 8-Bit Initialization Sequence ----------------
+
+    // Function Set command:
+    // Bits: 0 0 1 DL N F X X
+    // DL=1 (8-bit mode), N=1 (2-line), F=0 (5x8 dots)
+    // Hex: 0x38 (0011 1000)
+    lcd_send_cmd(0x38); // 8-bit mode, 2-line display, 5x8 font
+
+    // Standard initialization commands remain the same:
+    lcd_send_cmd(0x0C); // Display ON, Cursor OFF, Blink OFF
+    lcd_send_cmd(0x06); // Entry Mode: Increment Cursor, Shift OFF
+    lcd_send_cmd(0x01); // Clear Display
+    HAL_Delay(5);       // Clear requires extra time
+}
+
+void lcd_print(char *str)
+{
+    while (*str)
+    {
+        lcd_send_data(*str++);
+    }
+}
+
+/* ---------------- KEYPAD (SAME LOGIC, NEW PINS) ---------------- */
+
+// Keypad map remains identical to previous code.
+char keypad_map[4][4] = {
+    {'1','2','3','A'},
+    {'4','5','6','B'},
+    {'7','8','9','C'},
+    {'*','0','#','D'}
+};
+
+char keypad_read(void)
+{
+    // NEW PIN DEFINITIONS from image_2.png
+    // Columns (Outputs): PB14, PB15, PC8, PC9
+    // Rows (Inputs):     PC15, PC14, PC13, PC12
+
+    // Arrays to store pin numbers for easy looping:
+    uint16_t cols[4] = {GPIO_PIN_14, GPIO_PIN_15, GPIO_PIN_8, GPIO_PIN_9};
+    uint16_t rows[4] = {GPIO_PIN_15, GPIO_PIN_14, GPIO_PIN_13, GPIO_PIN_12};
+
+    // Keep all columns HIGH initially
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14 | GPIO_PIN_15, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_8 | GPIO_PIN_9, GPIO_PIN_SET);
+
+    for (int c = 0; c < 4; c++)
+    {
+        // 1. Determine Port and Pin for the current Column
+        GPIO_TypeDef *currentColPort = (c < 2) ? GPIOB : GPIOC; // Col 1,2 on B, 3,4 on C
+        uint16_t currentColPin = cols[c];
+
+        // 2. Active-Low Scanning: Pull one column LOW.
+        HAL_GPIO_WritePin(currentColPort, currentColPin, GPIO_PIN_RESET);
+
+        // 3. Scan all Rows (always on Port C).
+        for (int r = 0; r < 4; r++)
+        {
+            // Rows are Input Pull-up. If we press a button, row goes LOW.
+            if (HAL_GPIO_ReadPin(GPIOC, rows[r]) == GPIO_PIN_RESET)
+            {
+                HAL_Delay(200); // Software Debounce (same as previous logic)
+                return keypad_map[r][c]; // Match Row/Col index to map
+            }
+        }
+
+        // 4. Pull the column HIGH again before moving to the next.
+        HAL_GPIO_WritePin(currentColPort, currentColPin, GPIO_PIN_SET);
+    }
+
+    return 0; // No key pressed
+}
+
+/* ---------------- MAIN (SAME LOGIC) ---------------- */
+
+int main(void)
+{
+    HAL_Init();
+    SystemClock_Config();
+    MX_GPIO_Init(); // Sets up the complex NEW pin configuration
+    lcd_init();      // Sets up 8-bit mode
+
+    lcd_print("Press Key:");
+
+    while (1)
+    {
+        char key = keypad_read(); // Logic unchanged
+
+        if (key)
+        {
+            lcd_send_cmd(0xC0); // Move cursor to start of second line (unchanged)
+            lcd_send_data(key); // Display the ASCII key (unchanged)
+        }
+    }
+}
+
+/* ---------------- GPIO INIT (SIGNIFICANT CHANGES) ---------------- */
+
+/**
+ * @brief GPIO Initialization Function
+ * @note  This function is totally rewritten to match the complex
+ * pinouts required by image_1.png (LCD) and image_2.png (Keypad).
+ */
+static void MX_GPIO_Init(void)
+{
+    // 1. Enable ALL necessary Peripheral Clocks
+    __HAL_RCC_GPIOA_CLK_ENABLE(); // (Though PA is not strictly used, standard practice)
+    __HAL_RCC_GPIOB_CLK_ENABLE(); // Keypad Cols 1, 2
+    __HAL_RCC_GPIOC_CLK_ENABLE(); // Keypad Cols 3, 4 AND Rows 1, 2, 3, 4
+    __HAL_RCC_GPIOD_CLK_ENABLE(); // LCD Data D5-D7 AND LCD RS
+    __HAL_RCC_GPIOE_CLK_ENABLE(); // LCD Data D0-D4
+    __HAL_RCC_GPIOH_CLK_ENABLE(); // LCD Enable (EN)
+
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+    // =========================================================
+    // SECTION 1: Keypad Initialization (Ref: image_2.png)
+    // =========================================================
+
+    // A. Keypad Columns (OUTPUT) - Split across Ports B and C
+    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP; // Push-Pull (same logic)
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+
+    // Port B: Col 1 (PB14), Col 2 (PB15)
+    GPIO_InitStruct.Pin = GPIO_PIN_14 | GPIO_PIN_15;
+    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+    // Port C: Col 3 (PC8), Col 4 (PC9)
+    GPIO_InitStruct.Pin = GPIO_PIN_8 | GPIO_PIN_9;
+    HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+    // B. Keypad Rows (INPUT PULL-UP) - All on Port C
+    GPIO_InitStruct.Mode = GPIO_MODE_INPUT;     // Input (same logic)
+    GPIO_InitStruct.Pull = GPIO_PULLUP;        // Pull-up (same logic)
+    GPIO_InitStruct.Pin = GPIO_PIN_12 | GPIO_PIN_13 | GPIO_PIN_14 | GPIO_PIN_15;
+    HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+    // =========================================================
+    // SECTION 2: LCD Initialization (Ref: image_1.png, 8-bit mode)
+    // =========================================================
+
+    // All LCD pins (Data and Control) are OUTPUTS.
+    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+
+    // A. LCD Control Pins: EN (PH1) and RS (PD10)
+    // Note: RW is permanently grounded in manual, so we don't config it.
+
+    // Port H: Enable (EN)
+    GPIO_InitStruct.Pin = GPIO_PIN_1;
+    HAL_GPIO_Init(GPIOH, &GPIO_InitStruct);
+
+    // Port D: Register Select (RS)
+    GPIO_InitStruct.Pin = GPIO_PIN_10;
+    HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
+
+    // B. LCD Data Pins (D0 - D7) - Split across Ports E and D
+
+    // Port E: D0 (PE11) to D4 (PE15)
+    GPIO_InitStruct.Pin = GPIO_PIN_11 | GPIO_PIN_12 | GPIO_PIN_13 | GPIO_PIN_14 | GPIO_PIN_15;
+    HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
+
+    // Port D: D5 (PD7), D6 (PD8), D7 (PD9)
+    GPIO_InitStruct.Pin = GPIO_PIN_7 | GPIO_PIN_8 | GPIO_PIN_9;
+    HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
+}
+
+/* ---------------- CLOCK CONFIG (UNCHANGED) ---------------- */
+void SystemClock_Config(void)
+{
+    RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+    RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+
+    /** Configure the main internal regulator output voltage
+    */
+    __HAL_RCC_PWR_CLK_ENABLE();
+    __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
+
+    /** Initializes the RCC Oscillators according to the specified parameters
+    * in the RCC_OscInitTypeDef structure.
+    */
+    RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+    RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+    RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+    RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+    RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
+    RCC_OscInitStruct.PLL.PLLM = 8;
+    RCC_OscInitStruct.PLL.PLLN = 168; // Configured for standard F407 velocity
+    RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
+    RCC_OscInitStruct.PLL.PLLQ = 7;
+    if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+    {
+        Error_Handler();
+    }
+
+    /** Initializes the CPU, AHB and APB buses clocks
+    */
+    RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
+    RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+    RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+    RCC_ClkInitStruct.APB1CLKDivider = RCC_SYSCLK_DIV4;
+    RCC_ClkInitStruct.APB2CLKDivider = RCC_SYSCLK_DIV2;
+
+    if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_5) != HAL_OK)
+    {
+        Error_Handler();
+    }
+}
+
+// Added Error Handler stub for completeness
+void Error_Handler(void)
+{
+    __disable_irq();
+    while (1)
+    {
+    }
+}
