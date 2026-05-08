@@ -1,0 +1,92 @@
+#include "main.h"
+
+/* Function Prototypes */
+void SystemClock_Config(void);
+static void MX_GPIO_Init(void);
+
+/**
+  * @brief  The application entry point.
+  */
+int main(void)
+{
+  /* 1. Reset of all peripherals, Initializes the Flash interface and the Systick. */
+  HAL_Init();
+
+  /* 2. Configure the system clock */
+  SystemClock_Config();
+
+  /* 3. Initialize GPIO Port E (Pins 8 through 15) */
+  MX_GPIO_Init();
+
+  /* Infinite loop */
+  while (1)
+  {
+    /* REVERSE LOOP: Start from LED7 (PE15) down to LED0 (PE8) */
+    for (int i = 15; i >= 8; i--)
+    {
+      /* Clear all 8 LEDs first (PE8-PE15) to ensure a clean "chase" */
+      HAL_GPIO_WritePin(GPIOE, (0xFF << 8), GPIO_PIN_RESET);
+
+      /* Turn on the current LED in the reverse sequence */
+      HAL_GPIO_WritePin(GPIOE, (1 << i), GPIO_PIN_SET);
+
+      /* Delay to make the movement visible to the human eye */
+      HAL_Delay(200);
+    }
+  }
+}
+
+/**
+  * @brief GPIO Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_GPIO_Init(void)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+  /* Enable GPIO Port E Clock */
+  __HAL_RCC_GPIOE_CLK_ENABLE();
+
+  /* Set initial pin state to LOW (All LEDs OFF) */
+  HAL_GPIO_WritePin(GPIOE, GPIO_PIN_8|GPIO_PIN_9|GPIO_PIN_10|GPIO_PIN_11
+                          |GPIO_PIN_12|GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15, GPIO_PIN_RESET);
+
+  /* Configure Pins 8 through 15 as Output */
+  GPIO_InitStruct.Pin = GPIO_PIN_8|GPIO_PIN_9|GPIO_PIN_10|GPIO_PIN_11
+                          |GPIO_PIN_12|GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;   // Push-Pull mode
+  GPIO_InitStruct.Pull = GPIO_NOPULL;           // No pull-up/down resistors
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;  // Low frequency for power saving
+  HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
+}
+
+/**
+  * @brief System Clock Configuration
+  */
+void SystemClock_Config(void)
+{
+  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+
+  /* Configure the main internal regulator output voltage */
+  __HAL_RCC_PWR_CLK_ENABLE();
+  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
+
+  /* Initializes the RCC Oscillators */
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
+  HAL_RCC_OscConfig(&RCC_OscInitStruct);
+
+  /* Initializes the CPU, AHB and APB buses clocks */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSI;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
+
+  HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_0);
+}
