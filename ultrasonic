@@ -1,0 +1,153 @@
+#include "stm32f4xx.h"
+#include <stdio.h>
+
+/* ---------------- DELAY ---------------- */
+void delay_us(uint16_t us)
+{
+    TIM6->CNT = 0;
+    while (TIM6->CNT < us);
+}
+
+void delay_ms(uint32_t ms)
+{
+    for(uint32_t i = 0; i < ms * 4000; i++);
+}
+
+/* ---------------- LCD CONTROL ---------------- */
+#define RS_HIGH() (GPIOA->ODR |= (1<<1))
+#define RS_LOW()  (GPIOA->ODR &= ~(1<<1))
+#define EN_HIGH() (GPIOA->ODR |= (1<<0))
+#define EN_LOW()  (GPIOA->ODR &= ~(1<<0))
+
+/* Send 4-bit data */
+void lcd_send4(uint8_t data)
+{
+    GPIOC->ODR &= ~(0x0F);
+    GPIOC->ODR |= (data & 0x0F);
+
+    EN_HIGH();
+    delay_us(2);
+    EN_LOW();
+}
+
+/* Send command */
+void lcd_cmd(uint8_t cmd)
+{
+    RS_LOW();
+    lcd_send4(cmd >> 4);
+    lcd_send4(cmd);
+    delay_ms(2);
+}
+
+/* Send data */
+void lcd_data(uint8_t data)
+{
+    RS_HIGH();
+    lcd_send4(data >> 4);
+    lcd_send4(data);
+    delay_ms(2);
+}
+
+/* LCD init */
+void lcd_init(void)
+{
+    delay_ms(50);
+
+    RS_LOW();
+    lcd_send4(0x03);
+    delay_ms(5);
+
+    lcd_send4(0x03);
+    delay_us(150);
+
+    lcd_send4(0x03);
+    delay_ms(5);
+
+    lcd_send4(0x02);
+    delay_ms(5);
+
+    lcd_cmd(0x28); // 4-bit, 2 line
+    lcd_cmd(0x0C); // display ON
+    lcd_cmd(0x06); // entry mode
+    lcd_cmd(0x01); // clear
+
+    delay_ms(5);
+}
+
+/* Print string */
+void lcd_print(char *str)
+{
+    while (*str)
+    {
+        lcd_data(*str++);
+    }
+}
+
+/* ---------------- MAIN ---------------- */
+int main(void)
+{
+    unsigned int echo_time;
+    int distance_cm;
+    char buffer[16];
+
+    /* Enable clocks */
+    RCC->AHB1ENR |= (1<<0); // GPIOA
+    RCC->AHB1ENR |= (1<<1); // GPIOB
+    RCC->AHB1ENR |= (1<<2); // GPIOC
+    RCC->APB1ENR |= (1<<4); // TIM6
+
+    /* PA0, PA1 → output (EN, RS) */
+    GPIOA->MODER &= ~((3<<0) | (3<<2));
+    GPIOA->MODER |=  ((1<<0) | (1<<2));
+
+    /* PC0–PC3 → output (D4–D7) */
+    GPIOC->MODER &= ~((3<<0)|(3<<2)|(3<<4)|(3<<6));
+    GPIOC->MODER |=  ((1<<0)|(1<<2)|(1<<4)|(1<<6));
+
+    /* PB1 → output (TRIG) */
+    GPIOB->MODER &= ~(3<<2);
+    GPIOB->MODER |=  (1<<2);
+
+    /* PC5 → input (ECHO) */
+    GPIOC->MODER &= ~(3<<10);
+
+    /* Timer6 → 1 MHz */
+    TIM6->PSC = 16 - 1;
+    TIM6->ARR = 0xFFFF;
+    TIM6->CR1 |= 1;
+
+    /* LCD init */
+    lcd_init();
+
+    while (1)
+    {
+        /* Ensure echo LOW */
+        while (GPIOC->IDR & (1<<5));
+
+        /* Trigger pulse */
+        GPIOB->ODR |= (1<<1);
+        delay_us(10);
+        GPIOB->ODR &= ~(1<<1);
+
+        /* Wait for echo HIGH */
+        while (!(GPIOC->IDR & (1<<5)));
+
+        TIM6->CNT = 0;
+
+        /* Wait for echo LOW */
+        while (GPIOC->IDR & (1<<5));
+
+        echo_time = TIM6->CNT;
+
+        /* Convert to distance */
+        distance_cm = echo_time / 58;
+
+        /* Display */
+        sprintf(buffer, "Dist: %d ", distance_cm);
+
+        lcd_cmd(0x80);
+        lcd_print(buffer);
+
+        delay_ms(200);
+    }
+}
