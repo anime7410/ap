@@ -1,0 +1,153 @@
+#include "stm32f4xx.h"
+#include <stdio.h>
+
+/* ---------------- DELAY FUNCTIONS ---------------- */
+void delay_us(uint16_t us)
+{
+    TIM6->CNT = 0;
+    while (TIM6->CNT < us);
+}
+
+void delay_ms(uint32_t ms)
+{
+    for(uint32_t i = 0; i < ms * 4000; i++);
+}
+
+/* ---------------- LCD CONTROL ---------------- */
+#define RS_HIGH() (GPIOA->ODR |= (1<<1))
+#define RS_LOW()  (GPIOA->ODR &= ~(1<<1))
+#define EN_HIGH() (GPIOA->ODR |= (1<<0))
+#define EN_LOW()  (GPIOA->ODR &= ~(1<<0))
+
+void lcd_send4(uint8_t data)
+{
+    GPIOC->ODR &= ~(0x0F);
+    GPIOC->ODR |= (data & 0x0F);
+    EN_HIGH();
+    delay_us(2);
+    EN_LOW();
+}
+
+void lcd_cmd(uint8_t cmd)
+{
+    RS_LOW();
+    lcd_send4(cmd >> 4);
+    lcd_send4(cmd);
+    delay_ms(2);
+}
+
+void lcd_data(uint8_t data)
+{
+    RS_HIGH();
+    lcd_send4(data >> 4);
+    lcd_send4(data);
+    delay_ms(2);
+}
+
+void lcd_init(void)
+{
+    delay_ms(50);
+    lcd_send4(0x03); delay_ms(5);
+    lcd_send4(0x03); delay_us(150);
+    lcd_send4(0x03); delay_ms(5);
+    lcd_send4(0x02); delay_ms(5);
+    lcd_cmd(0x28);
+    lcd_cmd(0x0C);
+    lcd_cmd(0x06);
+    lcd_cmd(0x01);
+    delay_ms(5);
+}
+
+void lcd_print(char *str)
+{
+    while (*str) lcd_data(*str++);
+}
+
+/* ---------------- MAIN PROGRAM ---------------- */
+int main(void)
+{
+    unsigned int echo_time;
+    int distance_cm;
+    char buffer[16];
+
+    // Threshold for obstacle detection
+    const int OBSTACLE_LIMIT = 20;
+
+    /* 1. Enable Clocks */
+    RCC->AHB1ENR |= (1<<0) | (1<<1) | (1<<2); // GPIOA, GPIOB, GPIOC
+    RCC->APB1ENR |= (1<<4);                   // TIM6
+
+    /* 2. Configure GPIO Pins */
+    // PA0, PA1 -> Output (LCD EN, RS)
+    GPIOA->MODER &= ~((3<<0) | (3<<2));
+    GPIOA->MODER |=  ((1<<0) | (1<<2));
+
+    // PC0-PC3 -> Output (LCD D4-D7)
+    GPIOC->MODER &= ~((3<<0)|(3<<2)|(3<<4)|(3<<6));
+    GPIOC->MODER |=  ((1<<0)|(1<<2)|(1<<4)|(1<<6));
+
+    // PB1 -> Output (TRIG)
+    GPIOB->MODER &= ~(3<<2);
+    GPIOB->MODER |=  (1<<2);
+
+    // PA6 -> Input Mode (Even if set as TIM3_CH1 in ioc, polling can read IDR)
+    // Ensure PA6 is in AF mode or Input mode.
+    // In many STM32s, you can read the input state even in AF mode.
+    GPIOA->MODER &= ~(3<<12);
+
+    /* 3. Timer6 Setup */
+    TIM6->PSC = 16 - 1;
+    TIM6->ARR = 0xFFFF;
+    TIM6->CR1 |= 1;
+
+    lcd_init();
+
+    while (1)
+    {
+        /* --- STEP 1: MEASURE DISTANCE (POLLING) --- */
+
+        // Ensure PA6 (Echo) is low
+        while (GPIOA->IDR & (1<<6));
+
+        // Trigger pulse on PB1
+        GPIOB->ODR |= (1<<1);
+        delay_us(10);
+        GPIOB->ODR &= ~(1<<1);
+
+        // Wait for PA6 (Echo) to go HIGH
+        while (!(GPIOA->IDR & (1<<6)));
+
+        TIM6->CNT = 0;
+
+        // Wait for PA6 (Echo) to go LOW
+        while (GPIOA->IDR & (1<<6));
+
+        echo_time = TIM6->CNT;
+        distance_cm = echo_time / 58;
+
+        /* --- STEP 2: OBSTACLE DETECTION LOGIC --- */
+
+        lcd_cmd(0x01); // Clear display
+        lcd_cmd(0x80); // Move to row 1
+
+        if (distance_cm > 0 && distance_cm < OBSTACLE_LIMIT)
+        {
+            // Object found within 20cm
+            lcd_print("Object Detected!");
+
+            lcd_cmd(0xC0); // Move to row 2
+            sprintf(buffer, "Dist: %d cm", distance_cm);
+            lcd_print(buffer);
+        }
+        else
+        {
+            // Path is clear
+            lcd_print("Path Clear");
+
+            lcd_cmd(0xC0); // Move to row 2
+            lcd_print("Status: Safe");
+        }
+
+        delay_ms(300); // Wait before next scan
+    }
+}
