@@ -1,0 +1,219 @@
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file           : main.c
+  * @brief          : Main program body for DHT11 & LCD
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
+#include "lcd.h"
+#include <stdio.h>
+
+/* Private variables ---------------------------------------------------------*/
+TIM_HandleTypeDef htim6;
+
+/* DHT11 Global Variables */
+uint8_t Rh_byte1, Rh_byte2, Temp_byte1, Temp_byte2;
+uint16_t SUM, RH, TEMP;
+float Temperature = 0;
+float Humidity = 0;
+uint8_t Presence = 0;
+char buf[16]; // Changed to char to fix sprintf warning
+
+/* Private function prototypes -----------------------------------------------*/
+void SystemClock_Config(void);
+static void MX_GPIO_Init(void);
+static void MX_TIM6_Init(void);
+
+/* --- PRESERVED LOGIC: DELAY & PIN CONFIG --- */
+
+void delay (uint16_t time)
+{
+	__HAL_TIM_SET_COUNTER(&htim6, 0);
+	while ((__HAL_TIM_GET_COUNTER(&htim6)) < time);
+}
+
+void Set_Pin_Output (GPIO_TypeDef *GPIOx, uint16_t GPIO_Pin)
+{
+	GPIO_InitTypeDef GPIO_InitStruct = {0};
+	GPIO_InitStruct.Pin = GPIO_Pin;
+	GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+	GPIO_InitStruct.Pull = GPIO_NOPULL;
+	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH; // Increased for sharp pulses
+	HAL_GPIO_Init(GPIOx, &GPIO_InitStruct);
+}
+
+void Set_Pin_Input (GPIO_TypeDef *GPIOx, uint16_t GPIO_Pin)
+{
+	GPIO_InitTypeDef GPIO_InitStruct = {0};
+	GPIO_InitStruct.Pin = GPIO_Pin;
+	GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+	GPIO_InitStruct.Pull = GPIO_PULLUP; // DHT11 is open-drain
+	HAL_GPIO_Init(GPIOx, &GPIO_InitStruct);
+}
+
+/* --- PRESERVED LOGIC: DHT11 PROTOCOL --- */
+
+#define DHT11_PORT GPIOA
+#define DHT11_PIN GPIO_PIN_4
+
+void DHT11_Start (void)
+{
+	Set_Pin_Output (DHT11_PORT, DHT11_PIN);
+	HAL_GPIO_WritePin (DHT11_PORT, DHT11_PIN, 0);   // Pull low
+	HAL_Delay(18);   // DHT11 needs at least 18ms low (HAL_Delay is safer here)
+	HAL_GPIO_WritePin (DHT11_PORT, DHT11_PIN, 1);   // Pull high
+	delay (20);      // Wait 20us
+	Set_Pin_Input(DHT11_PORT, DHT11_PIN);
+}
+
+uint8_t DHT11_Check_Response (void)
+{
+	uint8_t Response = 0;
+	delay (40);
+	if (!(HAL_GPIO_ReadPin (DHT11_PORT, DHT11_PIN)))
+	{
+		delay (100);
+		if ((HAL_GPIO_ReadPin (DHT11_PORT, DHT11_PIN))) Response = 1;
+		else Response = 0xFF; // Error
+	}
+	while ((HAL_GPIO_ReadPin (DHT11_PORT, DHT11_PIN))); // Wait for pin to go low
+	return Response;
+}
+
+uint8_t DHT11_Read (void)
+{
+	uint8_t i,j;
+	for (j=0;j<8;j++)
+	{
+		while (!(HAL_GPIO_ReadPin (DHT11_PORT, DHT11_PIN))); // Wait for high
+		delay (40); // Wait 40us
+		if (!(HAL_GPIO_ReadPin (DHT11_PORT, DHT11_PIN)))
+		{
+			i &= ~(1<<(7-j)); // Write 0
+		}
+		else i |= (1<<(7-j)); // Write 1
+		while ((HAL_GPIO_ReadPin (DHT11_PORT, DHT11_PIN))); // Wait for low
+	}
+	return i;
+}
+
+/**
+  * @brief  The application entry point.
+  */
+int main(void)
+{
+  HAL_Init();
+  SystemClock_Config();
+
+  /* IMPORTANT: Initialize GPIO and TIMERS first */
+  MX_GPIO_Init();
+  MX_TIM6_Init();
+
+  /* Start the microsecond timer */
+  HAL_TIM_Base_Start(&htim6);
+
+  /* Initialize LCD */
+  lcd_init();
+  lcd_clear();
+
+  while (1)
+  {
+	  lcd_displayString(1, 0, "DHT11 Sensor");
+
+	  DHT11_Start();
+	  Presence = DHT11_Check_Response();
+
+	  // Read 5 bytes from sensor
+	  Rh_byte1   = DHT11_Read();
+	  Rh_byte2   = DHT11_Read();
+	  Temp_byte1 = DHT11_Read();
+	  Temp_byte2 = DHT11_Read();
+	  SUM        = DHT11_Read();
+
+	  TEMP = Temp_byte1;
+	  RH   = Rh_byte1;
+
+	  Temperature = (float)TEMP;
+	  Humidity    = (float)RH;
+
+	  /* Corrected formatting for LCD */
+	  sprintf(buf, "%2.1fC ", Temperature);
+	  lcd_displayString(2, 0, buf);
+
+	  sprintf(buf, "%2.1f%%Rh", Humidity); // Note the %% to print the % sign
+	  lcd_displayString(2, 8, buf);
+
+	  /* CRITICAL: DHT11 needs at least 1-2 seconds between readings */
+	  HAL_Delay(2000);
+  }
+}
+
+/**
+  * @brief System Clock Configuration (Tuned for 168MHz / APB1 84MHz)
+  */
+void SystemClock_Config(void)
+{
+  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+
+  __HAL_RCC_PWR_CLK_ENABLE();
+  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
+
+  /* Using HSI to avoid conflicts with PH1 (LCD Enable) */
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
+  RCC_OscInitStruct.PLL.PLLM = 8;
+  RCC_OscInitStruct.PLL.PLLN = 168;
+  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
+  RCC_OscInitStruct.PLL.PLLQ = 4;
+  HAL_RCC_OscConfig(&RCC_OscInitStruct);
+
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV4; // 42MHz (Timer 6 will be 84MHz)
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV2;
+  HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_5);
+}
+
+/**
+  * @brief TIM6 Initialization
+  */
+static void MX_TIM6_Init(void)
+{
+  htim6.Instance = TIM6;
+  htim6.Init.Prescaler = 83; // 84MHz / 84 = 1MHz (1 tick = 1us)
+  htim6.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim6.Init.Period = 65535;
+  htim6.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
+  HAL_TIM_Base_Init(&htim6);
+}
+
+/**
+  * @brief GPIO Initialization (Turns on all necessary clocks)
+  */
+static void MX_GPIO_Init(void)
+{
+  /* Enable Clocks for ALL Ports Used */
+  __HAL_RCC_GPIOA_CLK_ENABLE(); // For DHT11
+  __HAL_RCC_GPIOD_CLK_ENABLE(); // For LCD
+  __HAL_RCC_GPIOE_CLK_ENABLE(); // For LCD
+  __HAL_RCC_GPIOH_CLK_ENABLE(); // For LCD Enable (PH1)
+
+  /* Default PA4 Config */
+  Set_Pin_Output(GPIOA, GPIO_PIN_4);
+}
+
+void Error_Handler(void)
+{
+  __disable_irq();
+  while (1);
+}
