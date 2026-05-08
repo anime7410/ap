@@ -1,0 +1,123 @@
+#include "main.h"
+#include <stdio.h>
+#include "lcd.h"
+
+/* Private variables */
+ADC_HandleTypeDef hadc1;
+
+/* Function prototypes */
+void SystemClock_Config(void);
+static void MX_GPIO_Init(void);
+static void MX_ADC1_Init(void);
+
+int main(void)
+{
+    char buf[16];
+    uint32_t adc_val;
+    float voltage, temperature;
+
+    HAL_Init();
+    SystemClock_Config();
+    MX_GPIO_Init();
+    MX_ADC1_Init();
+
+    lcd_init();
+    lcd_clear();
+
+    while (1)
+    {
+        // Line 1
+        lcd_displayString(1, 1, "Temp Sensor");
+
+        // Start ADC
+        HAL_ADC_Start(&hadc1);
+
+        // Wait for conversion
+        HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
+
+        // Read ADC value
+        adc_val = HAL_ADC_GetValue(&hadc1);
+
+        // Convert to voltage
+        voltage = (adc_val * 3.3f) / 4095.0f;
+
+        // Convert to temperature (LM35: 10mV = 1°C)
+        temperature = voltage * 100.0f;
+
+        // Display temperature
+        sprintf(buf, "Temp: %.2f C", temperature);
+        lcd_displayString(2, 1, buf);
+
+        HAL_ADC_Stop(&hadc1);
+
+        HAL_Delay(1000);
+    }
+}
+
+/* ADC Configuration */
+static void MX_ADC1_Init(void)
+{
+    ADC_ChannelConfTypeDef sConfig = {0};
+
+    hadc1.Instance = ADC1;
+    hadc1.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV8;
+    hadc1.Init.Resolution = ADC_RESOLUTION_12B;
+    hadc1.Init.ScanConvMode = DISABLE;
+    hadc1.Init.ContinuousConvMode = DISABLE;
+    hadc1.Init.DiscontinuousConvMode = DISABLE;
+    hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
+    hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
+    hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
+    hadc1.Init.NbrOfConversion = 1;
+    hadc1.Init.DMAContinuousRequests = DISABLE;
+    hadc1.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
+
+    HAL_ADC_Init(&hadc1);
+
+    // PA3 = ADC Channel 3
+    sConfig.Channel = ADC_CHANNEL_3;
+    sConfig.Rank = 1;
+    sConfig.SamplingTime = ADC_SAMPLETIME_3CYCLES;
+
+    HAL_ADC_ConfigChannel(&hadc1, &sConfig);
+}
+
+/* GPIO Configuration */
+static void MX_GPIO_Init(void)
+{
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+}
+
+/* Clock Configuration */
+void SystemClock_Config(void)
+{
+    RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+    RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+
+    __HAL_RCC_PWR_CLK_ENABLE();
+
+    RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+    RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+    RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
+
+    HAL_RCC_OscConfig(&RCC_OscInitStruct);
+
+    RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK |
+                                 RCC_CLOCKTYPE_SYSCLK |
+                                 RCC_CLOCKTYPE_PCLK1 |
+                                 RCC_CLOCKTYPE_PCLK2;
+
+    RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSI;
+    RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+    RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
+    RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
+
+    HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_0);
+}
+
+/* Error Handler */
+void Error_Handler(void)
+{
+    __disable_irq();
+    while (1) {}
+}
