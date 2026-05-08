@@ -1,0 +1,178 @@
+#include "main.h"
+
+/* ---------------- SEGMENT CODES ---------------- */
+uint8_t seg_code[10] = {
+ 0x3F, // 0
+ 0x06, // 1
+ 0x5B, // 2
+ 0x4F, // 3
+ 0x66, // 4
+ 0x6D, // 5
+ 0x7D, // 6
+ 0x07, // 7
+ 0x7F, // 8
+ 0x6F // 9
+};
+
+/* ---------------- TIME VARIABLES ---------------- */
+uint8_t hours = 12;
+uint8_t minutes = 0;
+uint8_t seconds = 0;
+
+/* ---------------- MODE VARIABLES ---------------- */
+uint8_t display_mode = 0; // 0 = HH:MM, 1 = MM:SS
+uint32_t last_tick = 0;
+uint32_t mode_tick = 0;
+
+/* ---------------- FUNCTION PROTOTYPES ---------------- */
+void SystemClock_Config(void);
+static void MX_GPIO_Init(void);
+
+/* ---------------- TURN OFF ALL DIGITS ---------------- */
+void all_digits_off(void)
+{
+ HAL_GPIO_WritePin(GPIOH, GPIO_PIN_0 | GPIO_PIN_1, GPIO_PIN_RESET);
+ HAL_GPIO_WritePin(GPIOC, GPIO_PIN_14 | GPIO_PIN_15, GPIO_PIN_RESET);
+}
+
+/* ---------------- SET SEGMENTS ---------------- */
+void set_segments(uint8_t value)
+{
+ HAL_GPIO_WritePin(GPIOE, GPIO_PIN_0, (value & 0x01)); // A
+ HAL_GPIO_WritePin(GPIOE, GPIO_PIN_1, (value & 0x02)); // B
+ HAL_GPIO_WritePin(GPIOE, GPIO_PIN_2, (value & 0x04)); // C
+ HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, (value & 0x08)); // D
+ HAL_GPIO_WritePin(GPIOE, GPIO_PIN_4, (value & 0x10)); // E
+ HAL_GPIO_WritePin(GPIOE, GPIO_PIN_5, (value & 0x20)); // F
+ HAL_GPIO_WritePin(GPIOE, GPIO_PIN_6, (value & 0x40)); // G
+ HAL_GPIO_WritePin(GPIOE, GPIO_PIN_7, (value & 0x80)); // DP
+}
+
+/* ---------------- DISPLAY ONE DIGIT ---------------- */
+void display_digit(uint8_t digit, uint8_t num)
+{
+ all_digits_off();
+ set_segments(seg_code[num]);
+ switch(digit)
+ {
+ case 1: HAL_GPIO_WritePin(GPIOH, GPIO_PIN_0, GPIO_PIN_SET); break;
+ case 2: HAL_GPIO_WritePin(GPIOH, GPIO_PIN_1, GPIO_PIN_SET); break;
+ case 3: HAL_GPIO_WritePin(GPIOC, GPIO_PIN_14, GPIO_PIN_SET); break;
+ case 4: HAL_GPIO_WritePin(GPIOC, GPIO_PIN_15, GPIO_PIN_SET); break;
+ }
+}
+
+/* ---------------- MAIN ---------------- */
+int main(void)
+{
+ HAL_Init();
+ SystemClock_Config();
+ MX_GPIO_Init();
+
+ while (1)
+ {
+ /* SWITCH DISPLAY MODE EVERY 2 SECONDS */
+ if (HAL_GetTick() - mode_tick >= 2000)
+ {
+ mode_tick = HAL_GetTick();
+ display_mode = !display_mode;
+ }
+
+ /* DISPLAY LOGIC */
+ if (display_mode == 0)
+ {
+ // HH:MM - Always display normally
+ display_digit(1, hours / 10); HAL_Delay(2);
+ display_digit(2, hours % 10); HAL_Delay(2);
+ display_digit(3, minutes / 10); HAL_Delay(2);
+ display_digit(4, minutes % 10); HAL_Delay(2);
+ }
+ else
+ {
+ // MM:SS - Logic added for "EVEN COUNT" requirement
+ if (seconds % 2 == 0)
+ {
+ // Only display segments if seconds is an even number (0, 2, 4...)
+ display_digit(1, minutes / 10); HAL_Delay(2);
+ display_digit(2, minutes % 10); HAL_Delay(2);
+ display_digit(3, seconds / 10); HAL_Delay(2);
+ display_digit(4, seconds % 10); HAL_Delay(2);
+ }
+ else
+ {
+ // During odd seconds, keep display off or clear it
+ all_digits_off();
+ }
+ }
+
+ /* TIME UPDATE EVERY 1 SECOND */
+ if (HAL_GetTick() - last_tick >= 1000)
+ {
+ last_tick = HAL_GetTick();
+ seconds++;
+ if (seconds >= 60)
+ {
+ seconds = 0;
+ minutes++;
+ if (minutes >= 60)
+ {
+ minutes = 0;
+ hours++;
+ if (hours >= 24)
+ hours = 0;
+ }
+ }
+ }
+ }
+}
+
+/* ---------------- GPIO INIT ---------------- */
+static void MX_GPIO_Init(void)
+{
+ __HAL_RCC_GPIOE_CLK_ENABLE();
+ __HAL_RCC_GPIOH_CLK_ENABLE();
+ __HAL_RCC_GPIOC_CLK_ENABLE();
+
+ GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+ // SEGMENTS PE0–PE7
+ GPIO_InitStruct.Pin = GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2 | GPIO_PIN_3 |
+ GPIO_PIN_4 | GPIO_PIN_5 | GPIO_PIN_6 | GPIO_PIN_7;
+ GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+ GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+ HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
+
+ // DIGITS PH0, PH1
+ GPIO_InitStruct.Pin = GPIO_PIN_0 | GPIO_PIN_1;
+ HAL_GPIO_Init(GPIOH, &GPIO_InitStruct);
+
+ // DIGITS PC14, PC15
+ GPIO_InitStruct.Pin = GPIO_PIN_14 | GPIO_PIN_15;
+ HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+}
+
+/* ---------------- CLOCK CONFIG ---------------- */
+void SystemClock_Config(void)
+{
+ RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+ RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+
+ __HAL_RCC_PWR_CLK_ENABLE();
+ RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+ RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+ RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+ RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
+ RCC_OscInitStruct.PLL.PLLM = 16;
+ RCC_OscInitStruct.PLL.PLLN = 336;
+ RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV4;
+ RCC_OscInitStruct.PLL.PLLQ = 7;
+ HAL_RCC_OscConfig(&RCC_OscInitStruct);
+
+ RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_SYSCLK | RCC_CLOCKTYPE_PCLK1 |
+RCC_CLOCKTYPE_PCLK2;
+ RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+ RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+ RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
+ RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
+ HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2);
+}
